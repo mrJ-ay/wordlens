@@ -1,10 +1,9 @@
 services:
   - type: web
     name: wordlens-app
-    runtime: static
+    runtime: node
     buildCommand: npm install && npm run build
-    staticPublishPath: dist
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
+    startCommand: npm start
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
