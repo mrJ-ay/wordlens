@@ -37,7 +37,7 @@ function parseDeckText(text) {
   const deck = []
   const headword = (value) => /^[A-Za-z][A-Za-z' -]{1,32}$/.test(value) && value.split(/\s+/).length <= 3
 
-  for (let index = 0; index < lines.length && deck.length < 50; index += 1) {
+  for (let index = 0; index < lines.length && deck.length < 1000; index += 1) {
     const line = lines[index]
     const separated = line.match(/^(.+?)\s*(?:\||\t|:|：|—|–)\s*(.+)$/)
     if (separated) {
@@ -233,7 +233,8 @@ function ScanPage({ onImport }) {
   const video = useRef(null)
   const canvas = useRef(null)
   const stream = useRef(null)
-  const [image, setImage] = useState(null)
+  const [images, setImages] = useState([])
+  const [progress, setProgress] = useState('')
   const [cameraOpen, setCameraOpen] = useState(false)
   const [rawText, setRawText] = useState('')
   const [status, setStatus] = useState('단어책 페이지를 촬영하거나 사진을 선택하세요.')
@@ -244,12 +245,32 @@ function ScanPage({ onImport }) {
   async function openCamera() {
     try { stream.current = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false }); video.current.srcObject = stream.current; setCameraOpen(true); setStatus('단어와 뜻이 함께 보이도록 맞춘 뒤 촬영하세요.') } catch { setStatus('카메라를 열 수 없어요. 사진 선택을 사용해 주세요.') }
   }
-  function takePhoto() { const context = canvas.current.getContext('2d'); canvas.current.width = video.current.videoWidth; canvas.current.height = video.current.videoHeight; context.drawImage(video.current, 0, 0); canvas.current.toBlob((blob) => { setImage(blob); setStatus('사진을 촬영했어요. 이제 글자를 읽을 수 있어요.') }, 'image/jpeg', 0.92) }
-  function selectPhoto(event) { const file = event.target.files?.[0]; if (file) { setImage(file); setStatus(`사진 준비 완료: ${file.name}`) } }
-  async function readImage() { if (!image) return; setReading(true); setStatus('단어와 뜻을 읽는 중…'); try { const prepared = await preprocessForOcr(image); const worker = await createWorker('eng+kor'); await worker.setParameters({ preserve_interword_spaces: '1', user_defined_dpi: '300' }); const { data } = await worker.recognize(prepared); await worker.terminate(); setRawText(data.text); setStatus('인식 완료. 단어 | 뜻 형식을 확인하고 수정해 주세요.') } catch { setStatus('글자를 읽지 못했어요. 사진을 더 선명하게 찍거나 직접 수정해 주세요.') } finally { setReading(false) } }
+  function takePhoto() { const context = canvas.current.getContext('2d'); canvas.current.width = video.current.videoWidth; canvas.current.height = video.current.videoHeight; context.drawImage(video.current, 0, 0); canvas.current.toBlob((blob) => { setImages((list) => { setStatus(`${list.length + 1}페이지 촬영 완료. 다음 페이지를 찍거나 읽기를 누르세요.`); return [...list, blob] }) }, 'image/jpeg', 0.92) }
+  function selectPhoto(event) { const files = Array.from(event.target.files || []); if (files.length) { setImages((list) => { setStatus(`${list.length + files.length}페이지 준비 완료. 더 추가하거나 읽기를 누르세요.`); return [...list, ...files] }) } event.target.value = '' }
+  function removePage(index) { setImages((list) => list.filter((_, i) => i !== index)) }
+  async function readImage() {
+    if (!images.length) return
+    setReading(true)
+    let worker
+    try {
+      worker = await createWorker('eng+kor')
+      await worker.setParameters({ preserve_interword_spaces: '1', user_defined_dpi: '300' })
+      const texts = []
+      for (let i = 0; i < images.length; i += 1) {
+        setProgress(`${i + 1}/${images.length}페이지 읽는 중…`)
+        setStatus(`${i + 1}/${images.length}페이지 읽는 중…`)
+        const prepared = await preprocessForOcr(images[i])
+        const { data } = await worker.recognize(prepared)
+        texts.push(data.text.trim())
+      }
+      setRawText((prev) => [prev.trim(), ...texts].filter(Boolean).join('\n'))
+      setImages([])
+      setStatus('인식 완료. 단어 | 뜻 형식을 확인하고 수정해 주세요.')
+    } catch { setStatus('글자를 읽지 못했어요. 사진을 더 선명하게 찍거나 직접 수정해 주세요.') } finally { await worker?.terminate(); setProgress(''); setReading(false) }
+  }
   const parsed = useMemo(() => parseDeckText(rawText), [rawText])
 
-  return <div className="page-wrap scan-page"><div><span className="eyebrow">WORD BOOK SCAN</span><h1>사진을 암기 덱으로 바꾸세요.</h1><p>단어와 뜻을 읽어 현재 암기 덱으로 가져옵니다.</p></div><section className="scanner"><div className="camera-box">{cameraOpen ? <video ref={video} autoPlay playsInline /> : <div className="camera-placeholder"><span>▧</span><b>단어책 페이지</b><small>단어와 뜻이 함께 보이게 촬영</small></div>}<canvas ref={canvas} hidden /></div><div className="scan-buttons"><button className="secondary-button" onClick={openCamera}>카메라 열기</button>{cameraOpen && <button className="primary-button" onClick={takePhoto}>사진 촬영</button>}<label className="file-button">사진 선택<input type="file" accept="image/*" capture="environment" onChange={selectPhoto} /></label></div><p className="scan-status">{status}</p><button className="read-button" disabled={!image || reading} onClick={readImage}>{reading ? '글자 읽는 중…' : '사진에서 단어와 뜻 읽기 →'}</button><textarea value={rawText} onChange={(event) => setRawText(event.target.value)} placeholder={'단어 | 뜻 형식으로 확인·수정하세요.\n예: meticulous | 꼼꼼한, 세심한'} /><div className="import-bar"><span>{parsed.length ? `${parsed.length}개 항목을 찾았어요.` : '인식 결과를 입력하면 항목 수가 표시됩니다.'}</span><button className="primary-button" disabled={!parsed.length} onClick={() => onImport(parsed)}>암기 덱으로 가져오기 →</button></div></section></div>
+  return <div className="page-wrap scan-page"><div><span className="eyebrow">WORD BOOK SCAN</span><h1>사진을 암기 덱으로 바꾸세요.</h1><p>단어와 뜻을 읽어 현재 암기 덱으로 가져옵니다.</p></div><section className="scanner"><div className="camera-box">{cameraOpen ? <video ref={video} autoPlay playsInline /> : <div className="camera-placeholder"><span>▧</span><b>단어책 페이지</b><small>단어와 뜻이 함께 보이게 촬영</small></div>}<canvas ref={canvas} hidden /></div><div className="scan-buttons"><button className="secondary-button" onClick={openCamera}>카메라 열기</button>{cameraOpen && <button className="primary-button" onClick={takePhoto}>사진 촬영</button>}<label className="file-button">사진 선택<input type="file" accept="image/*" multiple onChange={selectPhoto} /></label></div><p className="scan-status">{status}</p>{images.length > 0 && <div className="page-chips">{images.map((_, i) => <span key={i}>{i + 1}페이지<button disabled={reading} onClick={() => removePage(i)} aria-label={`${i + 1}페이지 삭제`}>×</button></span>)}</div>}<button className="read-button" disabled={!images.length || reading} onClick={readImage}>{reading ? (progress || '글자 읽는 중…') : `사진 ${images.length}장에서 단어와 뜻 읽기 →`}</button><textarea value={rawText} onChange={(event) => setRawText(event.target.value)} placeholder={'단어 | 뜻 형식으로 확인·수정하세요.\n예: meticulous | 꼼꼼한, 세심한'} /><div className="import-bar"><span>{parsed.length ? `${parsed.length}개 항목을 찾았어요.` : '인식 결과를 입력하면 항목 수가 표시됩니다.'}</span><button className="primary-button" disabled={!parsed.length} onClick={() => onImport(parsed)}>암기 덱으로 가져오기 →</button></div></section></div>
 }
 
 /* OCR 정확도를 높이기 위한 전처리: 크기 보정 → 흑백 → 적응형 이진화(그림자·조명 불균일 제거) */
