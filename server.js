@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = join(fileURLToPath(new URL('.', import.meta.url)), 'dist')
 const port = process.env.PORT || 3000
-const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash'
+const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash'
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.woff2': 'font/woff2' }
 
 const transcribePrompt = `이 이미지는 영어 단어책의 한 페이지입니다.
@@ -52,7 +52,7 @@ async function gemini(key, parts) {
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
     body: JSON.stringify({
       contents: [{ parts }],
-      generationConfig: { temperature: 0, thinkingConfig: { thinkingBudget: 0 } },
+      generationConfig: { temperature: 0 },
     }),
   })
   const data = await upstream.json()
