@@ -246,8 +246,50 @@ function ScanPage({ onImport }) {
   }
   function takePhoto() { const context = canvas.current.getContext('2d'); canvas.current.width = video.current.videoWidth; canvas.current.height = video.current.videoHeight; context.drawImage(video.current, 0, 0); canvas.current.toBlob((blob) => { setImage(blob); setStatus('사진을 촬영했어요. 이제 글자를 읽을 수 있어요.') }, 'image/jpeg', 0.92) }
   function selectPhoto(event) { const file = event.target.files?.[0]; if (file) { setImage(file); setStatus(`사진 준비 완료: ${file.name}`) } }
-  async function readImage() { if (!image) return; setReading(true); setStatus('단어와 뜻을 읽는 중…'); try { const worker = await createWorker('eng+kor'); const { data } = await worker.recognize(image); await worker.terminate(); setRawText(data.text); setStatus('인식 완료. 단어 | 뜻 형식을 확인하고 수정해 주세요.') } catch { setStatus('글자를 읽지 못했어요. 사진을 더 선명하게 찍거나 직접 수정해 주세요.') } finally { setReading(false) } }
+  async function readImage() { if (!image) return; setReading(true); setStatus('단어와 뜻을 읽는 중…'); try { const prepared = await preprocessForOcr(image); const worker = await createWorker('eng+kor'); await worker.setParameters({ preserve_interword_spaces: '1', user_defined_dpi: '300' }); const { data } = await worker.recognize(prepared); await worker.terminate(); setRawText(data.text); setStatus('인식 완료. 단어 | 뜻 형식을 확인하고 수정해 주세요.') } catch { setStatus('글자를 읽지 못했어요. 사진을 더 선명하게 찍거나 직접 수정해 주세요.') } finally { setReading(false) } }
   const parsed = useMemo(() => parseDeckText(rawText), [rawText])
 
   return <div className="page-wrap scan-page"><div><span className="eyebrow">WORD BOOK SCAN</span><h1>사진을 암기 덱으로 바꾸세요.</h1><p>단어와 뜻을 읽어 현재 암기 덱으로 가져옵니다.</p></div><section className="scanner"><div className="camera-box">{cameraOpen ? <video ref={video} autoPlay playsInline /> : <div className="camera-placeholder"><span>▧</span><b>단어책 페이지</b><small>단어와 뜻이 함께 보이게 촬영</small></div>}<canvas ref={canvas} hidden /></div><div className="scan-buttons"><button className="secondary-button" onClick={openCamera}>카메라 열기</button>{cameraOpen && <button className="primary-button" onClick={takePhoto}>사진 촬영</button>}<label className="file-button">사진 선택<input type="file" accept="image/*" capture="environment" onChange={selectPhoto} /></label></div><p className="scan-status">{status}</p><button className="read-button" disabled={!image || reading} onClick={readImage}>{reading ? '글자 읽는 중…' : '사진에서 단어와 뜻 읽기 →'}</button><textarea value={rawText} onChange={(event) => setRawText(event.target.value)} placeholder={'단어 | 뜻 형식으로 확인·수정하세요.\n예: meticulous | 꼼꼼한, 세심한'} /><div className="import-bar"><span>{parsed.length ? `${parsed.length}개 항목을 찾았어요.` : '인식 결과를 입력하면 항목 수가 표시됩니다.'}</span><button className="primary-button" disabled={!parsed.length} onClick={() => onImport(parsed)}>암기 덱으로 가져오기 →</button></div></section></div>
+}
+
+/* OCR 정확도를 높이기 위한 전처리: 크기 보정 → 흑백 → 적응형 이진화(그림자·조명 불균일 제거) */
+async function preprocessForOcr(blob) {
+  const bitmap = await createImageBitmap(blob)
+  const target = 2200
+  const scale = Math.min(2.5, target / Math.max(bitmap.width, bitmap.height))
+  const w = Math.round(bitmap.width * scale)
+  const h = Math.round(bitmap.height * scale)
+  const cv = document.createElement('canvas')
+  cv.width = w
+  cv.height = h
+  const ctx = cv.getContext('2d', { willReadFrequently: true })
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(bitmap, 0, 0, w, h)
+  const img = ctx.getImageData(0, 0, w, h)
+  const d = img.data
+  const gray = new Uint8ClampedArray(w * h)
+  for (let i = 0, p = 0; i < d.length; i += 4, p += 1) gray[p] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
+  const integral = new Float64Array((w + 1) * (h + 1))
+  for (let y = 1; y <= h; y += 1) {
+    let row = 0
+    for (let x = 1; x <= w; x += 1) {
+      row += gray[(y - 1) * w + (x - 1)]
+      integral[y * (w + 1) + x] = integral[(y - 1) * (w + 1) + x] + row
+    }
+  }
+  const r = Math.max(15, Math.round(Math.min(w, h) / 24))
+  for (let y = 0; y < h; y += 1) {
+    const y0 = Math.max(0, y - r), y1 = Math.min(h - 1, y + r)
+    for (let x = 0; x < w; x += 1) {
+      const x0 = Math.max(0, x - r), x1 = Math.min(w - 1, x + r)
+      const area = (x1 - x0 + 1) * (y1 - y0 + 1)
+      const sum = integral[(y1 + 1) * (w + 1) + x1 + 1] - integral[y0 * (w + 1) + x1 + 1] - integral[(y1 + 1) * (w + 1) + x0] + integral[y0 * (w + 1) + x0]
+      const v = gray[y * w + x] < (sum / area) * 0.9 ? 0 : 255
+      const o = (y * w + x) * 4
+      d[o] = d[o + 1] = d[o + 2] = v
+      d[o + 3] = 255
+    }
+  }
+  ctx.putImageData(img, 0, 0)
+  return await new Promise((resolve) => cv.toBlob(resolve, 'image/png'))
 }
