@@ -84,6 +84,7 @@ export default function App() {
           <button className={page === 'learn' ? 'active' : ''} onClick={() => setPage('learn')}>암기 덱</button>
           <button className={page === 'test' ? 'active' : ''} onClick={() => setPage('test')}>모의시험</button>
           <button className={page === 'scan' ? 'active' : ''} onClick={() => setPage('scan')}>단어책 스캔</button>
+          <a href="https://oneid-helpdesk.onrender.com/?service=WORDLENS" target="_blank" rel="noopener" style={{ textDecoration: 'none', color: 'inherit', padding: '8px 12px', fontSize: '0.9rem', fontWeight: 600 }}>고객센터 ↗</a>
         </nav>
         <label className="cram-toggle">
           <span>벼락 암기</span>
